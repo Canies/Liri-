@@ -1,251 +1,528 @@
-# Liri Bot 
+# verror: rich JavaScript errors
 
-### Overview
+This module provides several classes in support of Joyent's [Best Practices for
+Error Handling in Node.js](http://www.joyent.com/developers/node/design/errors).
+If you find any of the behavior here confusing or surprising, check out that
+document first.
 
-In this assignment, you will make LIRI. LIRI is like iPhone's SIRI. However, while SIRI is a Speech Interpretation and Recognition Interface, LIRI is a _Language_ Interpretation and Recognition Interface. LIRI will be a command line node app that takes in parameters and gives you back data.
+The error classes here support:
 
-### Before You Begin
+* printf-style arguments for the message
+* chains of causes
+* properties to provide extra information about the error
+* creating your own subclasses that support all of these
 
-1. LIRI will search Spotify for songs, Bands in Town for concerts, and OMDB for movies.
+The classes here are:
 
-2. Make a new GitHub repository called liri-node-app and clone it to your computer.
+* **VError**, for chaining errors while preserving each one's error message.
+  This is useful in servers and command-line utilities when you want to
+  propagate an error up a call stack, but allow various levels to add their own
+  context.  See examples below.
+* **WError**, for wrapping errors while hiding the lower-level messages from the
+  top-level error.  This is useful for API endpoints where you don't want to
+  expose internal error messages, but you still want to preserve the error chain
+  for logging and debugging.
+* **SError**, which is just like VError but interprets printf-style arguments
+  more strictly.
+* **MultiError**, which is just an Error that encapsulates one or more other
+  errors.  (This is used for parallel operations that return several errors.)
 
-3. To retrieve the data that will power this app, you'll need to send requests using the `axios` package to the Bands in Town, Spotify and OMDB APIs. You'll find these Node packages crucial for your assignment.
 
-   * [Node-Spotify-API](https://www.npmjs.com/package/node-spotify-api)
+# Quick start
 
-   * [Axios](https://www.npmjs.com/package/axios)
+First, install the package:
 
-     * You'll use Axios to grab data from the [OMDB API](http://www.omdbapi.com) and the [Bands In Town API](http://www.artists.bandsintown.com/bandsintown-api)
+    npm install verror
 
-   * [Moment](https://www.npmjs.com/package/moment)
+If nothing else, you can use VError as a drop-in replacement for the built-in
+JavaScript Error class, with the addition of printf-style messages:
 
-   * [DotEnv](https://www.npmjs.com/package/dotenv)
-   
-## Submission Guide
-
-Create and use a standard GitHub repository. As this is a CLI App, it cannot be deployed to GitHub pages or Heroku. This time you'll need to include screenshots, a GIF, and/or a video showing us that you have the app working with no bugs. You can include these screenshots/GIFs or a link to a video in a `README.md` file.
-
-In order to meet the Employer Competitive standards and be ready to show your application to employers, the `README.md` file should meet the following criteria:
-
-1. Clearly state the problem the app is trying to solve (i.e. what is it doing and why)
-2. Give a high-level overview of how the app is organized
-3. Give start-to-finish instructions on how to run the app
-4. Include screenshots, gifs or videos of the app functioning
-5. Contain a link to a deployed version of the app
-6. Clearly list the technologies used in the app
-7. State your role in the app development
-
-Because screenshots (and well-written READMEs) are extremely important in the context of GitHub, this will be part of the grading in this assignment.
-
-If you haven't written a markdown file yet, [click here for a rundown](https://guides.github.com/features/mastering-markdown/), or just take a look at the raw file of these instructions.
-
-### Commits
-
-Having an active and healthy commit history on GitHub is important for your future job search. It is also extremely important for making sure your work is saved in your repository. If something breaks, committing often ensures you are able to go back to a working version of your code.
-
-* Committing often is a signal to employers that you are actively working on your code and learning.
-
-  * We use the mantra “commit early and often.”  This means that when you write code that works, add it and commit it!
-
-  * Numerous commits allow you to see how your app is progressing and give you a point to revert to if anything goes wrong.
-
-* Be clear and descriptive in your commit messaging.
-
-  * When writing a commit message, avoid vague messages like "fixed." Be descriptive so that you and anyone else looking at your repository knows what happened with each commit.
-
-* We would like you to have well over 200 commits by graduation, so commit early and often!
-
-### Submission on BCS
-
-* Please submit the link to the Github Repository!
-
-### Instructions
-
-1. Navigate to the root of your project and run `npm init -y` &mdash; this will initialize a `package.json` file for your project. The `package.json` file is required for installing third party npm packages and saving their version numbers. If you fail to initialize a `package.json` file, it will be troublesome, and at times almost impossible for anyone else to run your code after cloning your project.
-
-2. Make a `.gitignore` file and add the following lines to it. This will tell git not to track these files, and thus they won't be committed to Github.
-
-```
-node_modules
-.DS_Store
-.env
+```javascript
+var err = new VError('missing file: "%s"', '/etc/passwd');
+console.log(err.message);
 ```
 
-3. Make a JavaScript file named `keys.js`.
+This prints:
 
-* Inside keys.js your file will look like this:
+    missing file: "/etc/passwd"
 
-```js
-console.log('this is loaded');
+You can also pass a `cause` argument, which is any other Error object:
 
-exports.spotify = {
-  id: process.env.SPOTIFY_ID,
-  secret: process.env.SPOTIFY_SECRET
-};
+```javascript
+var fs = require('fs');
+var filename = '/nonexistent';
+fs.stat(filename, function (err1) {
+	var err2 = new VError(err1, 'stat "%s"', filename);
+	console.error(err2.message);
+});
 ```
 
-4. Next, create a file named `.env`, add the following to it, replacing the values with your API keys (no quotes) once you have them:
+This prints out:
 
-```js
-# Spotify API keys
+    stat "/nonexistent": ENOENT, stat '/nonexistent'
 
-SPOTIFY_ID=your-spotify-id
-SPOTIFY_SECRET=your-spotify-secret
+which resembles how Unix programs typically report errors:
 
+    $ sort /nonexistent
+    sort: open failed: /nonexistent: No such file or directory
+
+To match the Unixy feel, when you print out the error, just prepend the
+program's name to the VError's `message`.  Or just call
+[node-cmdutil.fail(your_verror)](https://github.com/joyent/node-cmdutil), which
+does this for you.
+
+You can get the next-level Error using `err.cause()`:
+
+```javascript
+console.error(err2.cause().message);
 ```
 
-* This file will be used by the `dotenv` package to set what are known as environment variables to the global `process.env` object in node. These are values that are meant to be specific to the computer that node is running on, and since we are gitignoring this file, they won't be pushed to github &mdash; keeping our API key information private.
+prints:
 
-* If someone wanted to clone your app from github and run it themselves, they would need to supply their own `.env` file for it to work.
+    ENOENT, stat '/nonexistent'
 
-5. Make a file called `random.txt`.
+Of course, you can chain these as many times as you want, and it works with any
+kind of Error:
 
-   * Inside of `random.txt` put the following in with no extra characters or white space:
-
-     * spotify-this-song,"I Want it That Way"
-
-6. Make a JavaScript file named `liri.js`.
-
-7. At the top of the `liri.js` file, add code to read and set any environment variables with the dotenv package:
-
-```js
-require("dotenv").config();
+```javascript
+var err1 = new Error('No such file or directory');
+var err2 = new VError(err1, 'failed to stat "%s"', '/junk');
+var err3 = new VError(err2, 'request failed');
+console.error(err3.message);
 ```
 
-8. Add the code required to import the `keys.js` file and store it in a variable.
+This prints:
 
-```js
-  var keys = require("./keys.js");
+    request failed: failed to stat "/junk": No such file or directory
+
+The idea is that each layer in the stack annotates the error with a description
+of what it was doing.  The end result is a message that explains what happened
+at each level.
+
+You can also decorate Error objects with additional information so that callers
+can not only handle each kind of error differently, but also construct their own
+error messages (e.g., to localize them, format them, group them by type, and so
+on).  See the example below.
+
+
+# Deeper dive
+
+The two main goals for VError are:
+
+* **Make it easy to construct clear, complete error messages intended for
+  people.**  Clear error messages greatly improve both user experience and
+  debuggability, so we wanted to make it easy to build them.  That's why the
+  constructor takes printf-style arguments.
+* **Make it easy to construct objects with programmatically-accessible
+  metadata** (which we call _informational properties_).  Instead of just saying
+  "connection refused while connecting to 192.168.1.2:80", you can add
+  properties like `"ip": "192.168.1.2"` and `"tcpPort": 80`.  This can be used
+  for feeding into monitoring systems, analyzing large numbers of Errors (as
+  from a log file), or localizing error messages.
+
+To really make this useful, it also needs to be easy to compose Errors:
+higher-level code should be able to augment the Errors reported by lower-level
+code to provide a more complete description of what happened.  Instead of saying
+"connection refused", you can say "operation X failed: connection refused".
+That's why VError supports `causes`.
+
+In order for all this to work, programmers need to know that it's generally safe
+to wrap lower-level Errors with higher-level ones.  If you have existing code
+that handles Errors produced by a library, you should be able to wrap those
+Errors with a VError to add information without breaking the error handling
+code.  There are two obvious ways that this could break such consumers:
+
+* The error's name might change.  People typically use `name` to determine what
+  kind of Error they've got.  To ensure compatibility, you can create VErrors
+  with custom names, but this approach isn't great because it prevents you from
+  representing complex failures.  For this reason, VError provides
+  `findCauseByName`, which essentially asks: does this Error _or any of its
+  causes_ have this specific type?  If error handling code uses
+  `findCauseByName`, then subsystems can construct very specific causal chains
+  for debuggability and still let people handle simple cases easily.  There's an
+  example below.
+* The error's properties might change.  People often hang additional properties
+  off of Error objects.  If we wrap an existing Error in a new Error, those
+  properties would be lost unless we copied them.  But there are a variety of
+  both standard and non-standard Error properties that should _not_ be copied in
+  this way: most obviously `name`, `message`, and `stack`, but also `fileName`,
+  `lineNumber`, and a few others.  Plus, it's useful for some Error subclasses
+  to have their own private properties -- and there'd be no way to know whether
+  these should be copied.  For these reasons, VError first-classes these
+  information properties.  You have to provide them in the constructor, you can
+  only fetch them with the `info()` function, and VError takes care of making
+  sure properties from causes wind up in the `info()` output.
+
+Let's put this all together with an example from the node-fast RPC library.
+node-fast implements a simple RPC protocol for Node programs.  There's a server
+and client interface, and clients make RPC requests to servers.  Let's say the
+server fails with an UnauthorizedError with message "user 'bob' is not
+authorized".  The client wraps all server errors with a FastServerError.  The
+client also wraps all request errors with a FastRequestError that includes the
+name of the RPC call being made.  The result of this failed RPC might look like
+this:
+
+    name: FastRequestError
+    message: "request failed: server error: user 'bob' is not authorized"
+    rpcMsgid: <unique identifier for this request>
+    rpcMethod: GetObject
+    cause:
+        name: FastServerError
+        message: "server error: user 'bob' is not authorized"
+        cause:
+            name: UnauthorizedError
+            message: "user 'bob' is not authorized"
+            rpcUser: "bob"
+
+When the caller uses `VError.info()`, the information properties are collapsed
+so that it looks like this:
+
+    message: "request failed: server error: user 'bob' is not authorized"
+    rpcMsgid: <unique identifier for this request>
+    rpcMethod: GetObject
+    rpcUser: "bob"
+
+Taking this apart:
+
+* The error's message is a complete description of the problem.  The caller can
+  report this directly to its caller, which can potentially make its way back to
+  an end user (if appropriate).  It can also be logged.
+* The caller can tell that the request failed on the server, rather than as a
+  result of a client problem (e.g., failure to serialize the request), a
+  transport problem (e.g., failure to connect to the server), or something else
+  (e.g., a timeout).  They do this using `findCauseByName('FastServerError')`
+  rather than checking the `name` field directly.
+* If the caller logs this error, the logs can be analyzed to aggregate
+  errors by cause, by RPC method name, by user, or whatever.  Or the
+  error can be correlated with other events for the same rpcMsgid.
+* It wasn't very hard for any part of the code to contribute to this Error.
+  Each part of the stack has just a few lines to provide exactly what it knows,
+  with very little boilerplate.
+
+It's not expected that you'd use these complex forms all the time.  Despite
+supporting the complex case above, you can still just do:
+
+   new VError("my service isn't working");
+
+for the simple cases.
+
+
+# Reference: VError, WError, SError
+
+VError, WError, and SError are convenient drop-in replacements for `Error` that
+support printf-style arguments, first-class causes, informational properties,
+and other useful features.
+
+
+## Constructors
+
+The VError constructor has several forms:
+
+```javascript
+/*
+ * This is the most general form.  You can specify any supported options
+ * (including "cause" and "info") this way.
+ */
+new VError(options, sprintf_args...)
+
+/*
+ * This is a useful shorthand when the only option you need is "cause".
+ */
+new VError(cause, sprintf_args...)
+
+/*
+ * This is a useful shorthand when you don't need any options at all.
+ */
+new VError(sprintf_args...)
 ```
-  
-* You should then be able to access your keys information like so
 
-  ```js
-  var spotify = new Spotify(keys.spotify);
-  ```
+All of these forms construct a new VError that behaves just like the built-in
+JavaScript `Error` class, with some additional methods described below.
 
-9. Make it so liri.js can take in one of the following commands:
+In the first form, `options` is a plain object with any of the following
+optional properties:
 
-   * `concert-this`
+Option name      | Type             | Meaning
+---------------- | ---------------- | -------
+`name`           | string           | Describes what kind of error this is.  This is intended for programmatic use to distinguish between different kinds of errors.  Note that in modern versions of Node.js, this name is ignored in the `stack` property value, but callers can still use the `name` property to get at it.
+`cause`          | any Error object | Indicates that the new error was caused by `cause`.  See `cause()` below.  If unspecified, the cause will be `null`.
+`strict`         | boolean          | If true, then `null` and `undefined` values in `sprintf_args` are passed through to `sprintf()`.  Otherwise, these are replaced with the strings `'null'`, and '`undefined`', respectively.
+`constructorOpt` | function         | If specified, then the stack trace for this error ends at function `constructorOpt`.  Functions called by `constructorOpt` will not show up in the stack.  This is useful when this class is subclassed.
+`info`           | object           | Specifies arbitrary informational properties that are available through the `VError.info(err)` static class method.  See that method for details.
 
-   * `spotify-this-song`
+The second form is equivalent to using the first form with the specified `cause`
+as the error's cause.  This form is distinguished from the first form because
+the first argument is an Error.
 
-   * `movie-this`
+The third form is equivalent to using the first form with all default option
+values.  This form is distinguished from the other forms because the first
+argument is not an object or an Error.
 
-   * `do-what-it-says`
+The `WError` constructor is used exactly the same way as the `VError`
+constructor.  The `SError` constructor is also used the same way as the
+`VError` constructor except that in all cases, the `strict` property is
+overriden to `true.
 
-### What Each Command Should Do
 
-1. `node liri.js concert-this <artist/band name here>`
+## Public properties
 
-   * This will search the Bands in Town Artist Events API (`"https://rest.bandsintown.com/artists/" + artist + "/events?app_id=codingbootcamp"`) for an artist and render the following information about each event to the terminal:
+`VError`, `WError`, and `SError` all provide the same public properties as
+JavaScript's built-in Error objects.
 
-     * Name of the venue
+Property name | Type   | Meaning
+------------- | ------ | -------
+`name`        | string | Programmatically-usable name of the error.
+`message`     | string | Human-readable summary of the failure.  Programmatically-accessible details are provided through `VError.info(err)` class method.
+`stack`       | string | Human-readable stack trace where the Error was constructed.
 
-     * Venue location
+For all of these classes, the printf-style arguments passed to the constructor
+are processed with `sprintf()` to form a message.  For `WError`, this becomes
+the complete `message` property.  For `SError` and `VError`, this message is
+prepended to the message of the cause, if any (with a suitable separator), and
+the result becomes the `message` property.
 
-     * Date of the Event (use moment to format this as "MM/DD/YYYY")
+The `stack` property is managed entirely by the underlying JavaScript
+implementation.  It's generally implemented using a getter function because
+constructing the human-readable stack trace is somewhat expensive.
 
-    * **Important**: There is no need to sign up for a Bands in Town `api_id` key. Use the `codingbootcamp` as your `app_id`. For example, the URL used to search for "Celine Dion" would look like the following:
+## Class methods
 
-      * `https://rest.bandsintown.com/artists/celine+dion/events?app_id=codingbootcamp`
+The following methods are defined on the `VError` class and as exported
+functions on the `verror` module.  They're defined this way rather than using
+methods on VError instances so that they can be used on Errors not created with
+`VError`.
 
-2. `node liri.js spotify-this-song '<song name here>'`
+### `VError.cause(err)`
 
-   * This will show the following information about the song in your terminal/bash window
+The `cause()` function returns the next Error in the cause chain for `err`, or
+`null` if there is no next error.  See the `cause` argument to the constructor.
+Errors can have arbitrarily long cause chains.  You can walk the `cause` chain
+by invoking `VError.cause(err)` on each subsequent return value.  If `err` is
+not a `VError`, the cause is `null`.
 
-     * Artist(s)
+### `VError.info(err)`
 
-     * The song's name
+Returns an object with all of the extra error information that's been associated
+with this Error and all of its causes.  These are the properties passed in using
+the `info` option to the constructor.  Properties not specified in the
+constructor for this Error are implicitly inherited from this error's cause.
 
-     * A preview link of the song from Spotify
+These properties are intended to provide programmatically-accessible metadata
+about the error.  For an error that indicates a failure to resolve a DNS name,
+informational properties might include the DNS name to be resolved, or even the
+list of resolvers used to resolve it.  The values of these properties should
+generally be plain objects (i.e., consisting only of null, undefined, numbers,
+booleans, strings, and objects and arrays containing only other plain objects).
 
-     * The album that the song is from
+### `VError.fullStack(err)`
 
-   * If no song is provided then your program will default to "The Sign" by Ace of Base.
+Returns a string containing the full stack trace, with all nested errors recursively
+reported as `'caused by:' + err.stack`.
 
-   * You will utilize the [node-spotify-api](https://www.npmjs.com/package/node-spotify-api) package in order to retrieve song information from the Spotify API.
+### `VError.findCauseByName(err, name)`
 
-   * The Spotify API requires you sign up as a developer to generate the necessary credentials. You can follow these steps in order to generate a **client id** and **client secret**:
+The `findCauseByName()` function traverses the cause chain for `err`, looking
+for an error whose `name` property matches the passed in `name` value. If no
+match is found, `null` is returned.
 
-   * Step One: Visit <https://developer.spotify.com/my-applications/#!/>
+If all you want is to know _whether_ there's a cause (and you don't care what it
+is), you can use `VError.hasCauseWithName(err, name)`.
 
-   * Step Two: Either login to your existing Spotify account or create a new one (a free account is fine) and log in.
+If a vanilla error or a non-VError error is passed in, then there is no cause
+chain to traverse. In this scenario, the function will check the `name`
+property of only `err`.
 
-   * Step Three: Once logged in, navigate to <https://developer.spotify.com/my-applications/#!/applications/create> to register a new application to be used with the Spotify API. You can fill in whatever you'd like for these fields. When finished, click the "complete" button.
+### `VError.hasCauseWithName(err, name)`
 
-   * Step Four: On the next screen, scroll down to where you see your client id and client secret. Copy these values down somewhere, you'll need them to use the Spotify API and the [node-spotify-api package](https://www.npmjs.com/package/node-spotify-api).
+Returns true if and only if `VError.findCauseByName(err, name)` would return
+a non-null value.  This essentially determines whether `err` has any cause in
+its cause chain that has name `name`.
 
-3. `node liri.js movie-this '<movie name here>'`
+### `VError.errorFromList(errors)`
 
-   * This will output the following information to your terminal/bash window:
+Given an array of Error objects (possibly empty), return a single error
+representing the whole collection of errors.  If the list has:
 
-     ```
-       * Title of the movie.
-       * Year the movie came out.
-       * IMDB Rating of the movie.
-       * Rotten Tomatoes Rating of the movie.
-       * Country where the movie was produced.
-       * Language of the movie.
-       * Plot of the movie.
-       * Actors in the movie.
-     ```
+* 0 elements, returns `null`
+* 1 element, returns the sole error
+* more than 1 element, returns a MultiError referencing the whole list
 
-   * If the user doesn't type a movie in, the program will output data for the movie 'Mr. Nobody.'
+This is useful for cases where an operation may produce any number of errors,
+and you ultimately want to implement the usual `callback(err)` pattern.  You can
+accumulate the errors in an array and then invoke
+`callback(VError.errorFromList(errors))` when the operation is complete.
 
-     * If you haven't watched "Mr. Nobody," then you should: <http://www.imdb.com/title/tt0485947/>
 
-     * It's on Netflix!
+### `VError.errorForEach(err, func)`
 
-   * You'll use the `axios` package to retrieve data from the OMDB API. Like all of the in-class activities, the OMDB API requires an API key. You may use `trilogy`.
+Convenience function for iterating an error that may itself be a MultiError.
 
-4. `node liri.js do-what-it-says`
+In all cases, `err` must be an Error.  If `err` is a MultiError, then `func` is
+invoked as `func(errorN)` for each of the underlying errors of the MultiError.
+If `err` is any other kind of error, `func` is invoked once as `func(err)`.  In
+all cases, `func` is invoked synchronously.
 
-   * Using the `fs` Node package, LIRI will take the text inside of random.txt and then use it to call one of LIRI's commands.
+This is useful for cases where an operation may produce any number of warnings
+that may be encapsulated with a MultiError -- but may not be.
 
-     * It should run `spotify-this-song` for "I Want it That Way," as follows the text in `random.txt`.
+This function does not iterate an error's cause chain.
 
-     * Edit the text in random.txt to test out the feature for movie-this and concert-this.
 
-### BONUS
+## Examples
 
-* In addition to logging the data to your terminal/bash window, output the data to a .txt file called `log.txt`.
+The "Demo" section above covers several basic cases.  Here's a more advanced
+case:
 
-* Make sure you append each command you run to the `log.txt` file. 
+```javascript
+var err1 = new VError('something bad happened');
+/* ... */
+var err2 = new VError({
+    'name': 'ConnectionError',
+    'cause': err1,
+    'info': {
+        'errno': 'ECONNREFUSED',
+        'remote_ip': '127.0.0.1',
+        'port': 215
+    }
+}, 'failed to connect to "%s:%d"', '127.0.0.1', 215);
 
-* Do not overwrite your file each time you run a command.
+console.log(err2.message);
+console.log(err2.name);
+console.log(VError.info(err2));
+console.log(err2.stack);
+```
 
-### Reminder: Submission on BCS
+This outputs:
 
-* Please submit the link to the Github Repository!
+    failed to connect to "127.0.0.1:215": something bad happened
+    ConnectionError
+    { errno: 'ECONNREFUSED', remote_ip: '127.0.0.1', port: 215 }
+    ConnectionError: failed to connect to "127.0.0.1:215": something bad happened
+        at Object.<anonymous> (/home/dap/node-verror/examples/info.js:5:12)
+        at Module._compile (module.js:456:26)
+        at Object.Module._extensions..js (module.js:474:10)
+        at Module.load (module.js:356:32)
+        at Function.Module._load (module.js:312:12)
+        at Function.Module.runMain (module.js:497:10)
+        at startup (node.js:119:16)
+        at node.js:935:3
 
-- - -
+Information properties are inherited up the cause chain, with values at the top
+of the chain overriding same-named values lower in the chain.  To continue that
+example:
 
-### Minimum Requirements
+```javascript
+var err3 = new VError({
+    'name': 'RequestError',
+    'cause': err2,
+    'info': {
+        'errno': 'EBADREQUEST'
+    }
+}, 'request failed');
 
-Attempt to complete homework assignment as described in instructions. If unable to complete certain portions, please pseudocode these portions to describe what remains to be completed. Adding a README.md as well as adding this homework to your portfolio are required as well and more information can be found below.
+console.log(err3.message);
+console.log(err3.name);
+console.log(VError.info(err3));
+console.log(err3.stack);
+```
 
-- - -
+This outputs:
 
-### Create a README.md
+    request failed: failed to connect to "127.0.0.1:215": something bad happened
+    RequestError
+    { errno: 'EBADREQUEST', remote_ip: '127.0.0.1', port: 215 }
+    RequestError: request failed: failed to connect to "127.0.0.1:215": something bad happened
+        at Object.<anonymous> (/home/dap/node-verror/examples/info.js:20:12)
+        at Module._compile (module.js:456:26)
+        at Object.Module._extensions..js (module.js:474:10)
+        at Module.load (module.js:356:32)
+        at Function.Module._load (module.js:312:12)
+        at Function.Module.runMain (module.js:497:10)
+        at startup (node.js:119:16)
+        at node.js:935:3
 
-Add a `README.md` to your repository describing the project. Here are some resources for creating your `README.md`. Here are some resources to help you along the way:
+You can also print the complete stack trace of combined `Error`s by using
+`VError.fullStack(err).`
 
-* [About READMEs](https://help.github.com/articles/about-readmes/)
+```javascript
+var err1 = new VError('something bad happened');
+/* ... */
+var err2 = new VError(err1, 'something really bad happened here');
 
-* [Mastering Markdown](https://guides.github.com/features/mastering-markdown/)
+console.log(VError.fullStack(err2));
+```
 
-- - -
+This outputs:
 
-### Add To Your Portfolio
+    VError: something really bad happened here: something bad happened
+        at Object.<anonymous> (/home/dap/node-verror/examples/fullStack.js:5:12)
+        at Module._compile (module.js:409:26)
+        at Object.Module._extensions..js (module.js:416:10)
+        at Module.load (module.js:343:32)
+        at Function.Module._load (module.js:300:12)
+        at Function.Module.runMain (module.js:441:10)
+        at startup (node.js:139:18)
+        at node.js:968:3
+    caused by: VError: something bad happened
+        at Object.<anonymous> (/home/dap/node-verror/examples/fullStack.js:3:12)
+        at Module._compile (module.js:409:26)
+        at Object.Module._extensions..js (module.js:416:10)
+        at Module.load (module.js:343:32)
+        at Function.Module._load (module.js:300:12)
+        at Function.Module.runMain (module.js:441:10)
+        at startup (node.js:139:18)
+        at node.js:968:3
 
-After completing the homework please add the piece to your portfolio. Make sure to add a link to your updated portfolio in the comments section of your homework so the TAs can easily ensure you completed this step when they are grading the assignment. To receive an 'A' on any assignment, you must link to it from your portfolio.
+`VError.fullStack` is also safe to use on regular `Error`s, so feel free to use
+it whenever you need to extract the stack trace from an `Error`, regardless if
+it's a `VError` or not.
 
-- - -
+# Reference: MultiError
 
-### One More Thing
+MultiError is an Error class that represents a group of Errors.  This is used
+when you logically need to provide a single Error, but you want to preserve
+information about multiple underying Errors.  A common case is when you execute
+several operations in parallel and some of them fail.
 
-If you have any questions about this project or the material we have covered, please post them in the community channels in slack so that your fellow developers can help you! If you're still having trouble, you can come to office hours for assistance from your instructor and TAs.
+MultiErrors are constructed as:
 
-**Good Luck!**
+```javascript
+new MultiError(error_list)
+```
+
+`error_list` is an array of at least one `Error` object.
+
+The cause of the MultiError is the first error provided.  None of the other
+`VError` options are supported.  The `message` for a MultiError consists the
+`message` from the first error, prepended with a message indicating that there
+were other errors.
+
+For example:
+
+```javascript
+err = new MultiError([
+    new Error('failed to resolve DNS name "abc.example.com"'),
+    new Error('failed to resolve DNS name "def.example.com"'),
+]);
+
+console.error(err.message);
+```
+
+outputs:
+
+    first of 2 errors: failed to resolve DNS name "abc.example.com"
+
+See the convenience function `VError.errorFromList`, which is sometimes simpler
+to use than this constructor.
+
+## Public methods
+
+
+### `errors()`
+
+Returns an array of the errors used to construct this MultiError.
+
+
+# Contributing
+
+See separate [contribution guidelines](CONTRIBUTING.md).
